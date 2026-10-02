@@ -107,8 +107,6 @@ export const useChatStore = defineStore('chat', () => {
     const epoch = ++conversationEpoch
     // 本节在途的翻页请求就此作废（它的 finally 带 epoch 守卫，不会自己复位），
     // 这里替它复位，否则标志会永久卡在 true，翻页从此不再放行。
-    // 本节在途的翻页请求就此作废（它的 finally 带 epoch 守卫，不会自己复位），
-    // 这里替它复位，否则标志会永久卡在 true，翻页从此不再放行。
     loadingMoreConversations.value = false
     loading.value = true
     try {
