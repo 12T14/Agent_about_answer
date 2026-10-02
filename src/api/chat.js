@@ -5,8 +5,9 @@ import { readStreamEvents } from '@/utils/streamEvents'
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
 export const chatAPI = {
-  // params 支持 { limit, before_updated_at, before_id }：不传时后端只返回最新一页，
-  // before_* 是 (updated_at, id) 复合游标，两个要么都给、要么都不给。
+  // params 支持 { limit, before_updated_at, before_id, q }：不传时后端只返回最新一页，
+  // before_* 是 (updated_at, id) 复合游标，两个要么都给、要么都不给；
+  // q 是标题检索词，不检索时不要带这个键（空串等同不检索，但键在不在是可断言的契约）。
   getConversations(params) {
     return request.get('/chat/conversations', { params })
   },

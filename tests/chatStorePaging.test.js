@@ -5,6 +5,9 @@ import { registerHooks } from 'node:module'
 // 会话列表分页（issue #191 引入、评审条件③点名缺用例）：fetchConversations /
 // loadMoreConversations / hasMoreConversations。
 //
+// 后半段并入 issue #251 的标题检索：检索词怎么进参数（空值不带 q 键）、翻页怎么带上它、
+// 以及搜索让并发成为常态之后的两个新问题——旧检索词的响应迟到、翻页在途时换了检索词。
+//
 // 只替换网络层（@/api/chat），跑的是真实的 src/stores/chat.js，口径同 tests/chatStore.test.js：
 // 请求进队列，用例自己决定什么时候返回、返回什么，因此可以断言「翻页带过去的
 // (updated_at, id) 复合游标是不是那一个」，而不只是数调用次数。
@@ -28,6 +31,9 @@ const stubSource = [
   '  return entry',
   '}',
   'export function respond(data) { take().resolve(data) }',
+  // 按位置返回：respond 是 FIFO，表达不了「后发的请求先回」——而搜索引入的并发正是
+  // 要断言「旧检索词的响应迟到时会不会覆盖新结果」，所以需要指定哪一笔先落地。
+  'export function respondAt(index, data) { pending[index].resolve(data) }',
   'export function respondError(error) { take().reject(error) }',
   'export function pendingCount() { return pending.length }',
   'export function resetStub() {',
@@ -56,7 +62,7 @@ registerHooks({
 
 const { createPinia, setActivePinia } = await import('pinia')
 const { useChatStore } = await import('../src/stores/chat.js')
-const { respond, respondError, resetStub, getConversationsCalls, pendingCount } =
+const { respond, respondAt, respondError, resetStub, getConversationsCalls, pendingCount } =
   await import(chatApiStub)
 
 // 与 src/stores/chat.js 的常量对齐：一次取一页，多要一条判断「还有没有更早的」。
@@ -251,4 +257,120 @@ test('在途时重复触发不叠加请求', async () => {
   await Promise.all([first, second])
 
   assert.equal(store.conversations.length, PAGE_SIZE + 2)
+})
+
+// ── issue #251：标题检索 ────────────────────────────────────────────────
+
+function searchWith(store, keyword, data) {
+  const request = store.setConversationQuery(keyword)
+  respond(data)
+  return request
+}
+
+test('检索词并入请求参数：有词带 q 键，没搜索时不出现 q 键', async () => {
+  const store = createStore()
+
+  await fetchWith(store, rows(1, 3))
+  // 「不搜索」必须逐字节等于引入检索之前的请求：多一个 q 键（哪怕是空串）都不算同现状。
+  assert.deepEqual(getConversationsCalls.at(-1), { limit: FETCH_LIMIT })
+
+  await searchWith(store, '制度', rows(1, 3))
+
+  assert.deepEqual(getConversationsCalls.at(-1), { limit: FETCH_LIMIT, q: '制度' })
+  assert.equal(store.conversationQuery, '制度', 'store 存的是已提交的检索词，供空结果文案判断')
+})
+
+test('过滤态翻页同时带上检索词与复合游标', async () => {
+  const store = createStore()
+  await searchWith(store, '制度', rows(1, PAGE_SIZE + 1))
+  assert.equal(store.hasMoreConversations, true)
+
+  const load = store.loadMoreConversations()
+  assert.deepEqual(
+    getConversationsCalls.at(-1),
+    {
+      limit: FETCH_LIMIT,
+      q: '制度',
+      before_updated_at: stamp(PAGE_SIZE),
+      before_id: `c-${PAGE_SIZE}`,
+    },
+    '翻页不能丢掉检索词，否则「还有更多」翻出来的是不过滤的会话'
+  )
+  respond(rows(PAGE_SIZE + 1, PAGE_SIZE + 3))
+  await load
+})
+
+test('清空检索词后请求里不再有 q 键', async () => {
+  const store = createStore()
+  await searchWith(store, '制度', rows(1, 3))
+
+  await searchWith(store, '', rows(1, 3))
+
+  assert.deepEqual(getConversationsCalls.at(-1), { limit: FETCH_LIMIT })
+  assert.equal(store.conversationQuery, null)
+})
+
+test('过滤后恰好取满一页仍有「还有更多」，取不满即到底', async () => {
+  const store = createStore()
+
+  await searchWith(store, '制度', rows(1, PAGE_SIZE + 1))
+  assert.equal(store.hasMoreConversations, true, '过滤后取回 51 条就是一整页，还有更早的命中')
+
+  await searchWith(store, '报销', rows(1, PAGE_SIZE))
+  assert.equal(store.hasMoreConversations, false, '只取回 50 条说明命中已经到底')
+})
+
+test('旧检索词的响应迟到时整段丢弃，不覆盖新结果', async () => {
+  const store = createStore()
+
+  const first = store.setConversationQuery('制')
+  const second = store.setConversationQuery('制度')
+  assert.equal(pendingCount(), 2, '两次检索各自在飞，后一次不取消前一次')
+
+  respondAt(1, rows(20, 22)) // 新检索先回
+  respondAt(0, rows(1, 3)) // 旧检索后回：必须被丢弃
+  await Promise.all([first, second])
+
+  assert.deepEqual(idsOf(store), ['c-20', 'c-21', 'c-22'])
+  assert.equal(store.loading, false, '旧世代的收尾不得改新世代的状态')
+})
+
+test('翻页在途时切换检索词，旧的更早一页不会追加进新列表', async () => {
+  const store = createStore()
+  await searchWith(store, '制', rows(1, PAGE_SIZE + 1))
+  assert.equal(store.hasMoreConversations, true)
+
+  const load = store.loadMoreConversations() // 捕获旧世代
+  const next = store.setConversationQuery('制度') // 开启新世代
+  assert.equal(pendingCount(), 2)
+
+  respondAt(1, rows(100, 102))
+  respondAt(0, rows(PAGE_SIZE + 1, PAGE_SIZE + 5)) // 旧检索词的更早一页，必须被丢弃
+  await Promise.all([load, next])
+
+  assert.deepEqual(idsOf(store), ['c-100', 'c-101', 'c-102'])
+  assert.equal(
+    store.loadingMoreConversations,
+    false,
+    '在途翻页被新世代作废后标志必须复位，否则翻页从此不再放行'
+  )
+})
+
+test('检索词剥空白后归一，与当前值相同的重复提交不产生请求', async () => {
+  const store = createStore()
+
+  const first = store.setConversationQuery('  制度  ')
+  // 参数在发请求前就已归一：断言的是构造出来的入参，不是响应。
+  assert.deepEqual(getConversationsCalls.at(-1), { limit: FETCH_LIMIT, q: '制度' })
+  respond(rows(1, 3))
+  await first
+
+  const callsAfterFirst = getConversationsCalls.length
+  await store.setConversationQuery('制度 ') // 归一后与当前值相同 -> 等值短路
+  assert.equal(getConversationsCalls.length, callsAfterFirst, '等值重复不该再发请求')
+  assert.equal(pendingCount(), 0)
+
+  await searchWith(store, '  ', rows(1, 3)) // 纯空白等同清空
+  assert.deepEqual(getConversationsCalls.at(-1), { limit: FETCH_LIMIT })
+  assert.equal(store.conversationQuery, null)
 })
