@@ -41,6 +41,22 @@
           </div>
         </div>
 
+        <!-- 标题检索（issue #251）：检索在服务端做，列表本身是分页的，
+             所以这里只管把词交给 store，过滤与「还有更多」都由它兜住。 -->
+        <div class="px-3 pb-2">
+          <el-input
+            v-model="conversationKeyword"
+            size="small"
+            clearable
+            class="conversation-search"
+            placeholder="搜索对话标题"
+            :prefix-icon="Search"
+            maxlength="200"
+            @input="scheduleConversationSearch"
+            @clear="applyConversationSearch"
+          />
+        </div>
+
         <div
           v-if="chatStore.historyManageMode"
           class="mx-3 mb-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3"
@@ -99,6 +115,7 @@
               ref="renameInputRef"
               v-model.trim="editingTitle"
               size="small"
+              class="rename-input"
               maxlength="40"
               @keyup.enter="submitRename(conversation, $event)"
               @keyup.esc="cancelRename()"
@@ -153,7 +170,7 @@
             v-if="!chatStore.conversations.length && !chatStore.loading"
             class="px-4 py-8 text-center text-xs text-slate-400"
           >
-            暂无历史对话
+            {{ chatStore.conversationQuery ? '没有匹配的对话' : '暂无历史对话' }}
           </div>
         </div>
       </div>
@@ -187,7 +204,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowDown,
@@ -199,6 +216,7 @@ import {
   FolderOpened,
   Operation,
   Plus,
+  Search,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { useChatStore } from '@/stores/chat'
@@ -225,6 +243,30 @@ const allConversationsSelected = computed(() =>
 const editingConversationId = ref(null)
 const editingTitle = ref('')
 const renameInputRef = ref(null)
+
+// 标题检索（issue #251）：防抖放在视图里，store 的动作保持同步 —— 输入框每敲一下都提交
+// 会连发请求，而 store 层做防抖会让「什么时候发」变成它的事，用例得跟着上假定时器。
+const conversationKeyword = ref('')
+const CONVERSATION_SEARCH_DEBOUNCE_MS = 300
+let searchTimer = null
+
+function scheduleConversationSearch() {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(applyConversationSearch, CONVERSATION_SEARCH_DEBOUNCE_MS)
+}
+
+function applyConversationSearch() {
+  if (searchTimer) {
+    clearTimeout(searchTimer)
+    searchTimer = null
+  }
+  // 失败不回滚输入框：词还在，用户可以改一改再试；列表由 store 决定怎么处置。
+  chatStore.setConversationQuery(conversationKeyword.value).catch(() => {})
+}
+
+onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer)
+})
 
 onMounted(() => {
   userStore.fetchProfile().catch(() => {})

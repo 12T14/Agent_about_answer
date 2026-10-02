@@ -212,8 +212,12 @@ test('管理模式开关与「新建对话」：壳的接线真的改了 store �
 // `PUT /chat/conversations/:id`（替身记在 calls 里）。
 //
 // 选择器约定：不用按钮下标（标题行的管理/新建按钮、以及管理模式里的复选框都会动到
-// `queryAll('button')` 的下标），改用一个稳定的类名 `rename-entry`；
-// 输入框本身在非管理模式下是全壳唯一的一个，直接 `view.query('input')`。
+// `queryAll('button')` 的下标），改用一个稳定的类名 `rename-entry`。
+//
+// 输入框同样不能靠「壳里只有一个 input」来定位了（issue #251 之后侧栏多了一个搜索框），
+// 所以改名框也写死一个类名：模板里给它加了 `class="rename-input"`。Element Plus 把传进去的
+// class 挂在包住真实 input 的 `<div class="el-input …">` 上，因此定位器是 `.rename-input input`
+// ——写成 `.rename-input` 拿到的是那个 div，没有 focus/value。
 //
 // 事件一律真派发（`Event('input')` / `KeyboardEvent('keyup')` / `FocusEvent('blur')`），
 // 不直接调组件内部方法——这样 v-model、`.stop`、按键修饰符都是真的在执行。
@@ -237,7 +241,7 @@ async function openRename(view, index) {
   assert.ok(icon, `第 ${index + 1} 行应当渲染出重命名入口`)
   icon.click()
   await settle(view)
-  const input = view.query('input')
+  const input = view.query('.rename-input input')
   assert.ok(input, '进入编辑态后应当渲染出输入框')
   return input
 }
@@ -258,7 +262,7 @@ test('重命名 R1：点图标进入编辑态，输入框预填当前标题并�
   try {
     const input = await openRename(view, 0)
 
-    assert.equal(view.queryAll('input').length, 1, '同一时刻只应当有一个输入框')
+    assert.equal(view.queryAll('.rename-input input').length, 1, '同一时刻只应当有一个输入框')
     assert.equal(input.value, CONV1.title, '输入框应当预填当前标题')
     const focused = await until(view, () => document.activeElement === input)
     assert.ok(focused, '进入编辑态后输入框应当自动获得焦点')
@@ -277,7 +281,7 @@ test('重命名 R2：点另一行的图标只保留一个编辑框，并切到�
     renameIcons(view)[0].click()
     await settle(view)
 
-    const inputs = view.queryAll('input')
+    const inputs = view.queryAll('.rename-input input')
     assert.equal(inputs.length, 1, '切行之后仍应当只有一个输入框')
     assert.equal(inputs[0].value, CONV1.title, '编辑框应当切到新行并预填它的标题')
   } finally {
@@ -305,7 +309,7 @@ test('重命名 R3：回车提交，发一次 PUT、就地更新标题并提示�
       view.messages.some((entry) => entry.level === 'success' && entry.message === '已重命名'),
       '提交成功应当提示「已重命名」'
     )
-    assert.equal(view.queryAll('input').length, 0, '提交之后应当退出编辑态')
+    assert.equal(view.queryAll('.rename-input input').length, 0, '提交之后应当退出编辑态')
   } finally {
     await close(view)
   }
@@ -323,7 +327,7 @@ test('重命名 R4：Esc 取消，不提交且保留原标题', async () => {
     assert.equal(putCalls().length, 0, 'Esc 不应当发请求')
     assert.match(view.text(), /第一段对话/, '取消后应当保留原标题')
     assert.doesNotMatch(view.text(), /不该保存的标题/, '草稿不应当出现在列表里')
-    assert.equal(view.queryAll('input').length, 0, '取消之后应当退出编辑态')
+    assert.equal(view.queryAll('.rename-input input').length, 0, '取消之后应当退出编辑态')
   } finally {
     await close(view)
   }
@@ -340,7 +344,7 @@ test('重命名 R5：失焦取消，不提交且保留原标题', async () => {
 
     assert.equal(putCalls().length, 0, '失焦不应当发请求')
     assert.match(view.text(), /第一段对话/, '失焦取消后应当保留原标题')
-    assert.equal(view.queryAll('input').length, 0, '失焦之后应当退出编辑态')
+    assert.equal(view.queryAll('.rename-input input').length, 0, '失焦之后应当退出编辑态')
   } finally {
     await close(view)
   }
@@ -369,7 +373,7 @@ test('重命名 R7：纯空白标题被拦截，不发请求', async () => {
 
     assert.equal(putCalls().length, 0, '纯空白不应当发请求')
     assert.match(view.text(), /第一段对话/, '列表里的标题不应当变化')
-    assert.equal(view.queryAll('input').length, 0, '拦截之后仍然退出编辑态')
+    assert.equal(view.queryAll('.rename-input input').length, 0, '拦截之后仍然退出编辑态')
   } finally {
     await close(view)
   }
@@ -386,7 +390,7 @@ test('重命名 R8：与原标题相同则短路，不发请求', async () => {
 
     assert.equal(putCalls().length, 0, '同名不应当发请求')
     assert.match(view.text(), /第一段对话/, '列表里的标题不应当变化')
-    assert.equal(view.queryAll('input').length, 0, '短路之后仍然退出编辑态')
+    assert.equal(view.queryAll('.rename-input input').length, 0, '短路之后仍然退出编辑态')
   } finally {
     await close(view)
   }
@@ -412,7 +416,7 @@ test('重命名 R9：请求失败时保留原标题、退出编辑态并提示�
       view.messages.some((entry) => entry.level === 'error' && entry.message === '重命名失败'),
       '提交失败应当提示「重命名失败」'
     )
-    assert.equal(view.queryAll('input').length, 0, '失败之后应当退出编辑态')
+    assert.equal(view.queryAll('.rename-input input').length, 0, '失败之后应当退出编辑态')
   } finally {
     await close(view)
   }
@@ -433,15 +437,11 @@ test('重命名 R10：管理模式里不出现重命名入口，编辑态随之�
     await settle(view)
 
     assert.equal(renameIcons(view).length, 0, '管理模式不应当渲染重命名入口')
-    // 增量断言：不写死输入框数量（管理模式本来就有每行一个复选框），
-    // 只钉「除复选框之外没有多余的输入框」。
+    // 选择器收紧到改名框之后这里可以写死 0：管理模式里每行的选择框不在 .rename-input 下，
+    // 所以「0 个」才是「编辑框确实收起来了」，而不是「壳里本来就没有别的 input」。
     const checkboxes = view.queryAll('.el-checkbox')
     assert.ok(checkboxes.length > 0, '管理模式每行应当有选择框')
-    assert.equal(
-      view.queryAll('input').length,
-      checkboxes.length,
-      '编辑框应当收起来，只剩下每行的选择框'
-    )
+    assert.equal(view.queryAll('.rename-input input').length, 0, '编辑框应当收起来')
   } finally {
     await close(view)
   }
@@ -467,7 +467,7 @@ test('重命名 R11：编辑态内点击不切换会话', async () => {
       '编辑态内点击不应当把路由推到会话详情'
     )
     assert.equal(chatStore.currentId, beforeSelect, '编辑态内点击不应当改写当前会话')
-    assert.ok(view.query('input'), '编辑态内点击不应当把编辑框点没了')
+    assert.ok(view.query('.rename-input input'), '编辑态内点击不应当把编辑框点没了')
   } finally {
     await close(view)
   }
@@ -507,10 +507,132 @@ test('重命名 R13：IME 组字中的回车不提交', async () => {
 
     assert.equal(putCalls().length, 0, '组字中的回车不应当提交')
     assert.equal(view.messages.length, 0, '组字中的回车不应当弹提示')
-    const stillEditing = view.query('input')
+    const stillEditing = view.query('.rename-input input')
     assert.ok(stillEditing, '组字中的回车之后应当仍处于编辑态')
     // 编辑态里标题在输入框的 value 上、不在 textContent 里，所以这里钉 value。
     assert.equal(stillEditing.value, '半成品输入', '草稿应当原样留在输入框里')
+  } finally {
+    await close(view)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// e. 标题检索（issue #251）
+// ---------------------------------------------------------------------------
+//
+// 检索词怎么进请求、翻页怎么带着它走，由 store 的用例钉死（tests/chatStorePaging.test.js）。
+// 这里只钉视图这一层：搜索框在不在、防抖窗口是不是真的存在、清空是不是绕过防抖、
+// 空结果文案会不会分岔。
+//
+// 定位器与改名框同理写成类名（`.conversation-search input`），不用 placeholder —— 文案是
+// 产品语，改一次碎一片；Element Plus 把 class 挂在包住真实 input 的 `<div class="el-input …">`
+// 上，所以要取里面那个 input（`.conversation-search` 单独拿出来是那个 div）。
+//
+// 防抖是 300ms 的真定时器，所以这里用真时间等，跟本文件既有的 `until()` 一个口径。
+
+function conversationListCalls() {
+  return calls.filter(
+    (entry) => entry.method === 'get' && entry.args[0] === '/chat/conversations'
+  )
+}
+
+test('侧栏渲染搜索框：挂载不因它多发请求', async () => {
+  const { view } = await mountLayout()
+
+  try {
+    assert.ok(
+      view.query('.conversation-search input'),
+      '侧栏应当渲染出搜索框（定位器写死为 .conversation-search input）'
+    )
+    // 承重：搜索框只是视图上的一个输入框，它自己不发请求 —— 挂载的请求数不因它变化。
+    assert.equal(conversationListCalls().length, 1, '挂载仍然只拉一笔会话列表')
+  } finally {
+    await close(view)
+  }
+})
+
+test('输入防抖：窗口内不发，窗口后只发一次', async () => {
+  const { view } = await mountLayout()
+
+  try {
+    const input = view.query('.conversation-search input')
+    assert.ok(input, '侧栏应当渲染出搜索框')
+
+    // 连敲两下（同一个 tick）：防抖不只是「等一会儿再发」，还要把窗口内的多次输入并成一笔。
+    typeInto(input, '制')
+    typeInto(input, '制度')
+
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await view.flush(2)
+    assert.equal(conversationListCalls().length, 1, '防抖窗口内不应当发检索请求')
+
+    assert.ok(
+      await until(view, () => conversationListCalls().length === 2, 800),
+      '防抖窗口结束后应当发一次检索请求'
+    )
+    assert.equal(
+      conversationListCalls().at(-1).args[1].params.q,
+      '制度',
+      '发出去的应当是最后那一次输入（前一次被窗口并掉了）'
+    )
+
+    // 再等一会儿，确认「只发一次」：每敲一下各排一个定时器的写法会在这里多出一笔。
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    await view.flush(2)
+    assert.equal(conversationListCalls().length, 2, '窗口内的两次输入只应当合成一笔请求')
+  } finally {
+    await close(view)
+  }
+})
+
+test('清空即时生效：点清除按钮不等防抖就发一笔不检索的请求', async () => {
+  const { view } = await mountLayout()
+
+  try {
+    const input = view.query('.conversation-search input')
+    typeInto(input, '制度')
+    assert.ok(
+      await until(view, () => conversationListCalls().length === 2, 800),
+      '先让检索词真的提交出去，否则清空会因为等值短路而不发请求'
+    )
+    assert.equal(conversationListCalls().at(-1).args[1].params.q, '制度')
+
+    // 走 el-input 自己的清除按钮（不是再敲一次键盘）：clear() 先发 update:modelValue 再发
+    // clear，所以 @clear 拿到的 `conversationKeyword` 已经是空串。
+    const clearIcon = view.query('.conversation-search .el-input__clear')
+    assert.ok(clearIcon, 'clearable 的输入框应当渲染出清除按钮')
+    clearIcon.click()
+
+    // 不等防抖窗口（300ms）就能看到请求 —— 这正是「清空即时」与「输入防抖」的区别。
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    await view.flush(2)
+    assert.equal(conversationListCalls().length, 3, '清空应当立刻再发一笔请求')
+    assert.deepEqual(
+      conversationListCalls().at(-1).args[1].params,
+      conversationListCalls()[0].args[1].params,
+      '清空之后的请求应当与挂载那笔（不检索）逐字段相同，尤其不能再带 q 键'
+    )
+  } finally {
+    await close(view)
+  }
+})
+
+test('空结果文案分岔：过滤态说「没有匹配的对话」', async () => {
+  // 列表种成空：替身对 /chat/conversations 一律回这一个空数组，检索前后都是空列表，
+  // 于是文案的差别只可能来自「有没有检索词」，而不是「列表碰巧变空了」。
+  const { view } = await mountLayout({ conversations: [] })
+
+  try {
+    assert.match(view.text(), /暂无历史对话/, '没搜索时空列表说的是「暂无历史对话」')
+
+    const input = view.query('.conversation-search input')
+    typeInto(input, '不存在的标题')
+
+    assert.ok(
+      await until(view, () => view.text().includes('没有匹配的对话'), 1200),
+      '检索之后的空列表应当说「没有匹配的对话」'
+    )
+    assert.doesNotMatch(view.text(), /暂无历史对话/, '两句文案是分岔的，不应当同时出现')
   } finally {
     await close(view)
   }
