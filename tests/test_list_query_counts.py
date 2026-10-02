@@ -128,8 +128,13 @@ def _add_knowledge_base(api, name, files=0):
     return base
 
 
-def _add_conversation(api, cid, knowledge_base_id=None):
-    conversation = Conversation(id=cid, user_id=api.alice.id, title=f"会话-{cid}", knowledge_base_id=knowledge_base_id)
+def _add_conversation(api, cid, knowledge_base_id=None, title=None):
+    conversation = Conversation(
+        id=cid,
+        user_id=api.alice.id,
+        title=title if title is not None else f"会话-{cid}",
+        knowledge_base_id=knowledge_base_id,
+    )
     api.db.add(conversation)
     api.db.commit()
     return conversation
@@ -246,6 +251,45 @@ def test_conversation_list_selects_stay_constant(api):
         api.client.get("/api/chat/conversations")
         grown = list(statements)
 
+    assert len(grown) == len(measured)
+
+
+def test_conversation_search_selects_stay_constant(api):
+    """带 q 的列表同样是「1 条会话查询 + 1 条 selectinload」，且不随命中行数增长。
+
+    issue #251 的过滤必须下推成 SQL 谓词。容易写错的另一面是：谓词下了推，命中的行
+    却还是逐条补知识库（懒加载），于是查询数随**命中行数**增长——比不带 q 时更难发现，
+    因为「结果是对的」。这里连同上界与「加数据不加查询数」一起钉住。
+    """
+    bases = [_add_knowledge_base(api, f"kb-{index}") for index in range(6)]
+    for index, base in enumerate(bases):
+        _add_conversation(api, f"conv-{index}", knowledge_base_id=base.id, title=f"会话-甲-{index}")
+
+    with recorded_selects(api) as statements:
+        response = api.client.get("/api/chat/conversations", params={"q": "会话"})
+        measured = list(statements)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 6
+    assert {item["knowledge_base_name"] for item in body} == {base.name for base in bases}
+    # 过滤确实写进了 SQL：否则下面的「≤2」可以靠「压根没过滤」通过。
+    assert any("LIKE" in statement for statement in measured)
+    assert len(measured) <= 2
+
+    for index in range(6, 12):
+        _add_conversation(
+            api,
+            f"conv-{index}",
+            knowledge_base_id=bases[index % len(bases)].id,
+            title=f"会话-甲-{index}",
+        )
+
+    with recorded_selects(api) as statements:
+        grown_response = api.client.get("/api/chat/conversations", params={"q": "会话"})
+        grown = list(statements)
+
+    assert len(grown_response.json()) == 12
     assert len(grown) == len(measured)
 
 

@@ -15,6 +15,7 @@ from datetime import datetime
 from fastapi import HTTPException
 
 from crud.pagination import LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT
+from schema.schemas import CONVERSATION_QUERY_MAX_LENGTH
 
 
 def resolve_list_limit(limit: int | None) -> int:
@@ -41,3 +42,23 @@ def resolve_conversation_cursor(
     if before_updated_at is None or not cursor_id:
         raise HTTPException(422, "游标必须同时给出 before_updated_at 与 before_id")
     return before_updated_at, cursor_id
+
+
+def resolve_conversation_query(q: str | None) -> str | None:
+    """标题检索词兜底：归一空白，超长报 422，空值统一成 None。
+
+    None 与空串都表示「不检索」——路由签名上不能写 `min_length=1`，那会把显式传来的
+    `q=`（前端清空搜索框后拼参数时最自然的形式）打成 422。所以「空」在这里收口，
+    调用方只判 `if q:`，不用自己区分三种空法。
+
+    只剥两端空白、不做大小写折叠：折叠交给 SQL 的 `ilike`（连同列上的排序规则一起），
+    在这里折一次会在非 ASCII 上折出与 SQL 不一致的结果。
+    """
+    keyword = (q or "").strip()
+    if not keyword:
+        return None
+    if len(keyword) > CONVERSATION_QUERY_MAX_LENGTH:
+        raise HTTPException(
+            422, f"q 长度不能超过 {CONVERSATION_QUERY_MAX_LENGTH} 个字符"
+        )
+    return keyword

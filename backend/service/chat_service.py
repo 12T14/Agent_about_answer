@@ -26,7 +26,7 @@ from database.session import SessionLocal, get_db
 from rag.learning_trace import TraceRecorder, compact_trace_reference
 from model.models import Conversation, Message, User, _new_id
 from rag.ragas_eval import schedule_ragas_evaluation
-from schema.schemas import ChatRequest, RenameRequest
+from schema.schemas import CONVERSATION_QUERY_MAX_LENGTH, ChatRequest, RenameRequest
 from service import rate_limit
 from service.auth_service import authenticate, get_current_user
 from service.oss_service import (
@@ -36,7 +36,11 @@ from service.oss_service import (
     _put_oss_object,
     is_service_minted_key,
 )
-from service.pagination_service import resolve_conversation_cursor, resolve_list_limit
+from service.pagination_service import (
+    resolve_conversation_cursor,
+    resolve_conversation_query,
+    resolve_list_limit,
+)
 from service.trace_service import _safe_trace_add, _safe_trace_attach, _safe_trace_finish, _trace_sse_payloads
 from service.utils_service import (
     CHAT_ATTACHMENT_MAX_BYTES,
@@ -116,6 +120,7 @@ def list_conversations(
     limit: Annotated[int, Query(ge=1, le=LIST_MAX_LIMIT)] = LIST_DEFAULT_LIMIT,
     before_updated_at: Annotated[datetime | None, Query()] = None,
     before_id: Annotated[str | None, Query()] = None,
+    q: Annotated[str | None, Query(max_length=CONVERSATION_QUERY_MAX_LENGTH)] = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -125,6 +130,11 @@ def list_conversations(
     要么都给；只给一个会被 resolve_conversation_cursor 判 422。取值直接回带上一次
     响应里最后一条的 updated_at 与 id，语义与消息接口的 before_id 同族（键集游标，
     不是 offset）。不传时返回最新一页，页大小默认 LIST_DEFAULT_LIMIT。
+
+    q 是按标题的子串检索（issue #251）：不传/空串/全空白都等同不检索，结果与加这个
+    参数之前逐字节一致；传了就在 SQL 里过滤，页大小仍以「命中行数」为准（见
+    crud_chat.list_conversations 的说明）。大小写不敏感、通配符按字面处理，长度上限
+    走 CONVERSATION_QUERY_MAX_LENGTH（列宽 200，与写入侧的 40 故意不同）。
     """
     cursor = resolve_conversation_cursor(before_updated_at, before_id)
     rows = crud_chat.list_conversations(
@@ -132,6 +142,7 @@ def list_conversations(
         user.id,
         limit=resolve_list_limit(limit),
         before=cursor,
+        q=resolve_conversation_query(q),
     )
     return [_serialize_conversation(c, user.id) for c in rows]
 

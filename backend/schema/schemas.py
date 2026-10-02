@@ -55,6 +55,13 @@ class KnowledgeBaseRequest(BaseModel):
 # 按字节收会把合法标题误杀。
 CONVERSATION_TITLE_MAX_LENGTH = 40
 
+# 标题**检索词**的长度上限（issue #251）。取列宽 String(200) 而不是上面那个 40，两者
+# **故意不同**，别顺手对齐：40 是写入侧的产品口径（UI 改名框 + 自生成标题），谁都不能
+# 改出更长的标题；200 是检索侧的匹配口径，只用来兜住「用户往搜索框里糊了一整段」的
+# 滥用与超长 LIKE 模式，跟库里能存多长的标题不是一回事。按 40 收会误杀合法检索——用户
+# 完全可能粘一段比标题更长的文本来找它（子串匹配下这本来就是合法的搜法）。
+CONVERSATION_QUERY_MAX_LENGTH = 200
+
 
 class RenameRequest(BaseModel):
     title: str = Field(max_length=CONVERSATION_TITLE_MAX_LENGTH)

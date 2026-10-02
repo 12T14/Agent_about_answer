@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from config import CHAT_ATTACHMENT_LEASE_SECONDS
 from crud import trace as crud_trace
+from crud.like_escape import LIKE_ESCAPE, like_contains_pattern
 from crud.pagination import LIST_DEFAULT_LIMIT, clamp_limit, datetime_cursor_value, seconds_text
 from model.models import ChatAttachmentUpload, ChatTraceSession, Conversation, Message
 from service.json_utils import load_json_value
@@ -87,6 +88,7 @@ def list_conversations(
     *,
     limit: int = LIST_DEFAULT_LIMIT,
     before: tuple[datetime, str] | None = None,
+    q: str | None = None,
 ) -> list[Conversation]:
     """按 user_id 取一页会话，按「最近活动」倒序，与旧接口的数组顺序一致。
 
@@ -114,6 +116,14 @@ def list_conversations(
     属于本单之外的可见行为变更，不做（见 issue #239 的修复计划）。
 
     `before` 是 (updated_at, id) 复合游标，两者必须同时给出（service 层负责拦半个游标）。
+
+    `q` 是按标题的检索词（issue #251），`None` 表示不检索。过滤必须**下推成 SQL 谓词**、
+    与游标同层 AND，而不是先取一页再在 Python 里筛：后者会让一页的命中数随命中率浮动，
+    「返回了不足一页」被前端读成「没有更多了」，翻页直接断在半路。放同层的另一个好处是
+    `limit` 依然是「命中行数」的上限，不是「扫描行数」的上限——两者在语义上必须一致。
+    这里只负责拼 SQL，转义与空白归一是 `crud.like_escape` 与 `pagination_service` 的事；
+    本层再兜一次 `if q:`，是为了让绕过 service 的直接调用传空串时也不至于拼出 `%%`
+    （那是「匹配任意行」，与「含这个子串」不是一回事，见 like_escape 的模块说明）。
     """
     limit = clamp_limit(limit)
     # 排序与游标过滤共用同一个秒级表达式：两处必须同一口径，否则游标落不到排序位置上
@@ -126,6 +136,14 @@ def list_conversations(
         .options(selectinload(Conversation.knowledge_base))
         .filter_by(user_id=user_id)
     )
+    if q:
+        # ilike 而不是 like：让大小写在 SQL 里显式折叠，不依赖「SQLite 的 LIKE 恰好只对 ASCII
+        # 不敏感 + MySQL 列排序规则恰好也不敏感」这种两张库各自碰巧成立的巧合。反正这一列没有
+        # 可用索引（#176：user_id 过滤之后本就要 filesort），多套一层 lower() 不额外付代价。
+        # ESCAPE 必须与本模块绑的模式同源（like_escape 的模块说明），否则模式里的 ! 只是普通字符。
+        query = query.filter(
+            Conversation.title.ilike(like_contains_pattern(q), escape=LIKE_ESCAPE)
+        )
     if before is not None:
         before_updated_at, before_id = before
         # 等价于 (updated_at, id) < (before_updated_at, before_id) 的行值比较，写成展开式是为了
