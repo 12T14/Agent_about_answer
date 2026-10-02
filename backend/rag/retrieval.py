@@ -11,6 +11,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from config import RETRIEVAL_ROUTE_TOP_K
+from crud.like_escape import LIKE_ESCAPE, escape_like_char as _escape_like_char
 from database.session import SessionLocal
 from model.models import KnowledgeFile
 from rag.llm import call_chat_json, call_router_json
@@ -47,7 +48,6 @@ KEYWORD_CHUNK_OVERLAP = 180
 KEYWORD_RECALL_BATCH_SIZE = 2
 KEYWORD_RECALL_BATCH_ROWS_MAX = 32
 KEYWORD_RECALL_BATCH_CHARS = 4_000_000
-LIKE_ESCAPE = "!"
 # 归一化后的关键词里出现这些字符时，正文还可能用另一个「SQL 的 LOWER 折不到」的写法
 # （键 = 归一化结果里的字符，值 = 它的另一个来源）。全码位扫描确认只有两处：
 # İ(U+0130).lower() == 'i' + U+0307（'i' 与那个组合点各有来源）、K(U+212A).lower() == 'k'。
@@ -475,14 +475,6 @@ def _sql_case_foldable(keyword: str) -> bool:
     的关键词同样不会漏召回。
     """
     return all(char.isascii() or char.lower() == char.upper() for char in keyword)
-
-
-def _escape_like_char(char: str) -> str:
-    # 反斜杠一并转义：MySQL 的习惯是把 \ 当默认转义符，`\%` 会被当成字面百分号，
-    # 正好会把我插入的通配符吃掉（预筛变窄、可能漏召回）。
-    if char == LIKE_ESCAPE or char in {"%", "_", "\\"}:
-        return LIKE_ESCAPE + char
-    return char
 
 
 def _needs_case_fold(clean_keywords: list[str]) -> bool:
