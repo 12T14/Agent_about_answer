@@ -241,6 +241,7 @@ Current files:
 - `test_chunking.py`
 - `test_config_helpers.py`
 - `test_conversation_activity_bump_239.py`
+- `test_conversation_title_whitespace_265.py`
 - `test_cors_credentials_235.py`
 - `test_default_users.py`
 - `test_empty_extraction_166.py`
@@ -513,7 +514,9 @@ no content echoed and the stored value unchanged (T3/T4), a value outside `Liter
 missing `feedback` key is a `422` whose `detail[0]["type"]` is `literal_error`/`missing` (T5),
 feedback on a user-authored message is rejected by the assistant-only role guard (T6), a freshly
 created message defaults to `0` (T7), and `_ensure_schema_columns()` adds the column to a legacy
-table idempotently so the pre-existing row reads back as `0` (T8).
+table idempotently so the pre-existing row reads back as `0` (T8). Conversation renaming rejects
+whitespace-only titles without changing storage and trims valid titles while preserving internal
+spaces, the request length limit, authentication and ownership checks (#265).
 
 `conftest.py` puts `backend/` on `sys.path` so the tests can import application modules, and holds the test doubles shared by more than one test file: the `FakeQuery`/`FakeDb`/`FakeUser`/`FakeKnowledgeBase`/`FakeTraceRecorder` classes, the pytest fixtures built on them (`fake_user`, `fake_db`, `fake_knowledge_base`, `trace_recorder_cls`), and the SSE helpers (`collect_stream`, `parse_sse_frames`, `frames_of_type`, `streamed_content`). Test doubles used by a single file stay in that file.
 

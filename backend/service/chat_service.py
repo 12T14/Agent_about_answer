@@ -473,7 +473,10 @@ def delete_conversation(cid: str, user: User = Depends(get_current_user),
 
 def rename_conversation(cid: str, body: RenameRequest, user: User = Depends(get_current_user),
                         db: Session = Depends(get_db)):
-    conv = crud_chat.rename_conversation(db, cid, user.id, body.title)
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(400, "会话标题不能为空")
+    conv = crud_chat.rename_conversation(db, cid, user.id, title)
     if not conv:
         raise HTTPException(404, "对话不存在")
     return {"message": "ok"}
