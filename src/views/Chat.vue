@@ -160,16 +160,36 @@
               </div>
             </template>
             <div v-else class="space-y-2">
-              <div v-if="hasDisplayValue(message.content)" class="whitespace-pre-wrap text-sm leading-6">{{ message.content }}</div>
-              <div v-if="message.attachments?.length" class="grid max-w-sm grid-cols-2 gap-2">
-                <img
-                  v-for="attachment in message.attachments"
-                  :key="attachment.object_key || attachment.url"
-                  :src="attachment.url"
-                  :alt="attachment.name || '上传图片'"
-                  class="h-28 w-full rounded-md border border-white/30 object-cover"
+              <template v-if="isEditing(message, index)">
+                <el-input
+                  :ref="setEditRef"
+                  class="message-edit-input"
+                  v-model="editingDraft"
+                  type="textarea"
+                  :rows="3"
+                  resize="none"
+                  @keydown.enter="handleEditEnter"
+                  @keydown.esc="cancelEdit"
                 />
-              </div>
+                <p class="text-xs text-white/70">Enter 提交 · Shift + Enter 换行 · Esc 取消</p>
+                <p v-if="dropsTail(index)" class="text-xs text-white/70">提交后，这条消息之后的内容将被移除</p>
+                <div class="flex justify-end gap-2">
+                  <el-button size="small" @click="cancelEdit">取消</el-button>
+                  <el-button size="small" type="primary" @click="submitEdit">提交</el-button>
+                </div>
+              </template>
+              <template v-else>
+                <div v-if="hasDisplayValue(message.content)" class="whitespace-pre-wrap text-sm leading-6">{{ message.content }}</div>
+                <div v-if="message.attachments?.length" class="grid max-w-sm grid-cols-2 gap-2">
+                  <img
+                    v-for="attachment in message.attachments"
+                    :key="attachment.object_key || attachment.url"
+                    :src="attachment.url"
+                    :alt="attachment.name || '上传图片'"
+                    class="h-28 w-full rounded-md border border-white/30 object-cover"
+                  />
+                </div>
+              </template>
             </div>
 
             <div
@@ -200,6 +220,22 @@
                   :class="message.feedback === -1 ? 'text-brand-600' : 'text-slate-400'"
                   :disabled="!message.id"
                   @click="onFeedback(message, -1)"
+                />
+              </el-tooltip>
+            </div>
+
+            <div
+              v-if="message.role === 'user' && !isEditing(message, index)"
+              class="pointer-events-none absolute right-2 top-2 flex rounded-md border border-white/30 bg-white/15 opacity-0 shadow-xs transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100"
+            >
+              <el-tooltip content="编辑" placement="bottom">
+                <el-button
+                  link
+                  :icon="Edit"
+                  class="text-white"
+                  data-testid="edit-message"
+                  :disabled="chatStore.streaming"
+                  @click="startEdit(message, index)"
                 />
               </el-tooltip>
             </div>
@@ -518,6 +554,9 @@ const attachments = ref([])
 const uploadingAttachment = ref(false)
 const knowledgeBases = computed(() => knowledgeStore.knowledgeBases)
 const selectedKnowledgeBaseId = ref(null)
+const editingKey = ref(null)
+const editingDraft = ref('')
+const editInputRef = ref(null)
 
 const isCurrentConversationStreaming = computed(() => {
   if (!chatStore.streaming) return false
@@ -585,6 +624,7 @@ onMounted(async () => {
 watch(
   () => route.params.id,
   async (id) => {
+    cancelEdit()
     await refreshKnowledgeBases()
     if (!id) {
       if (!chatStore.streaming) {
@@ -606,7 +646,9 @@ watch(
 watch(
   () => chatStore.streaming,
   (value) => {
-    if (!value) {
+    if (value) {
+      cancelEdit()
+    } else {
       scrollToBottom()
     }
   }
@@ -683,18 +725,82 @@ function onFeedback(message, value) {
   chatStore.setMessageFeedback(message.id, next).catch(() => {})
 }
 
+// 消息的稳定身份：有 id 用 id，没有（本地乐观消息）退回到「下标 + 角色 + 时间」。
+// 编辑态存的是这个 key 而不是下标，是为了让列表在编辑期间因流式/分页变化时，
+// 不会把编辑框悄悄挪到另一条消息上。
+function messageKey(message, index) {
+  if (message.id != null) return `id:${message.id}`
+  return `i:${index}:${message.role}:${message.created_at}`
+}
+
+function isEditing(message, index) {
+  return editingKey.value !== null && editingKey.value === messageKey(message, index)
+}
+
+// 提交会把这条消息之后的整段（含助手回答）截掉，所以只在真有尾巴时提示。
+function dropsTail(index) {
+  return index < chatStore.messages.length - 1
+}
+
+// v-for 里的字符串 ref 会被收集成数组，必须用函数 ref。
+function setEditRef(el) {
+  if (el) editInputRef.value = el
+}
+
+// 编辑重发与「重新生成」是同一件事：截断到 index、把文本放回 question、走同一条发送路径。
+// 区别只在入口控件、文本来源和守卫。
+async function resendFrom(index, text) {
+  if (chatStore.streaming) return
+  chatStore.replaceMessages(chatStore.messages.slice(0, index))
+  question.value = text
+  await sendMessage()
+}
+
+function startEdit(message, index) {
+  if (chatStore.streaming) return
+  editingKey.value = messageKey(message, index)
+  editingDraft.value = message.content
+  nextTick(() => editInputRef.value?.focus())
+}
+
+async function submitEdit() {
+  if (chatStore.streaming) return
+  const next = editingDraft.value.trim()
+  // 空文本是「校验没过」，不是「提交完成」：与 confirmRename 的先退出再校验相反，
+  // 这里留在编辑态、保留草稿，免得把用户刚清空的输入连人带草稿一起吞掉。
+  if (!next) return
+  const key = editingKey.value
+  const target = chatStore.messages.findIndex((message, i) => messageKey(message, i) === key)
+  // 与 #257 同一套竞态纪律：任何 await 之前先同步退出编辑态。
+  editingKey.value = null
+  editingDraft.value = ''
+  if (target < 0) return
+  if (next === chatStore.messages[target].content) return
+  await resendFrom(target, next)
+}
+
+function cancelEdit() {
+  if (editingKey.value === null) return
+  editingKey.value = null
+  editingDraft.value = ''
+}
+
+function handleEditEnter(event) {
+  if (event.isComposing || event.keyCode === 229) return
+  if (event.shiftKey) return
+  event.preventDefault()
+  submitEdit()
+}
+
 async function regenerate(index) {
-  const messages = chatStore.messages
-  const previousUserMessage = [...messages]
+  const previousUserMessage = [...chatStore.messages]
     .slice(0, index)
     .reverse()
     .find((message) => message.role === 'user')
 
-  if (!previousUserMessage || chatStore.streaming) return
+  if (!previousUserMessage) return
 
-  chatStore.replaceMessages(messages.slice(0, index))
-  question.value = previousUserMessage.content
-  await sendMessage()
+  await resendFrom(index, previousUserMessage.content)
 }
 
 function startRename() {
