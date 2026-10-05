@@ -252,6 +252,7 @@ Current files:
 - `test_cors_credentials_235.py`
 - `test_default_users.py`
 - `test_empty_extraction_166.py`
+- `test_empty_model_response_259.py`
 - `test_env_example_parity.py`
 - `test_grounding.py`
 - `test_image_upload_octet_stream_237.py`
@@ -527,7 +528,15 @@ spaces, the request length limit, authentication and ownership checks (#265). Co
 export (#252) reads real SQLite messages in ascending ID batches of at most 200, without changing
 chat-history paging. Authenticated HTTP cases cover complete exports above the page cap, tied
 timestamps, ID gaps, user ownership, source-field filtering, empty conversations, safe UTF-8
-filenames, a fixed initial upper ID, and failure before any partial download can be returned.
+filenames, a fixed initial upper ID, and failure before any partial download can be returned. Model
+generation that normally exhausts without any final text sends one explicit error before DONE,
+records `generation_failed` with `empty_response` and `assistant_not_saved`, and finishes the failed
+trace before the client can disconnect on that error (#259). The cases replace only model factories
+along the real chat-service/chain/LLM path, cover zero chunks and all-empty chunks, and keep
+empty-prefix success, existing model errors and fallback reset semantics intact. Cancellation,
+direct generator exceptions and pre-generation rejection keep their existing paths; no empty
+assistant is stored, no automatic retry is introduced, and the same conversation accepts the next
+question after the failed stream releases its concurrency slot.
 
 `conftest.py` puts `backend/` on `sys.path` so the tests can import application modules, and holds the test doubles shared by more than one test file: the `FakeQuery`/`FakeDb`/`FakeUser`/`FakeKnowledgeBase`/`FakeTraceRecorder` classes, the pytest fixtures built on them (`fake_user`, `fake_db`, `fake_knowledge_base`, `trace_recorder_cls`), and the SSE helpers (`collect_stream`, `parse_sse_frames`, `frames_of_type`, `streamed_content`). Test doubles used by a single file stay in that file.
 
